@@ -1,0 +1,10 @@
+# build.sh output — rebuilt locally, not committed
+vendor/bin/
+vendor/.build/
+
+# python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store

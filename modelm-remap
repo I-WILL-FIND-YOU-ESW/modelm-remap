@@ -1,0 +1,695 @@
+#!/usr/bin/env python3
+"""
+modelm-remap — remap keys on an IBM Model M connected through a Soarer's Converter.
+
+It talks to the converter directly:
+  1. listens for the key you physically press,
+  2. shows a menu of target keys (Command / Option / etc. first),
+  3. rewrites the converter's EEPROM config so the remap survives reboots.
+
+The low-level tools (scas / scdis / sctool) are vendored under ./vendor/bin and
+built by ./build.sh. Nothing is compiled on the fly and no daemon is installed.
+
+Examples
+  modelm-remap                     interactive wizard (press a key -> choose target)
+  modelm-remap set RALT LGUI       non-interactive remap
+  modelm-remap listen              print keys as you press them
+  modelm-remap show                show the config currently in the converter
+  modelm-remap keys                list all valid key names
+  modelm-remap info                firmware / EEPROM info
+"""
+
+import argparse
+import datetime
+import os
+import re
+import select
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+APP = "modelm-remap"
+VID_PID = "16c0:047d"
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+CONFIG_DIR = os.path.expanduser(os.environ.get("MODELM_REMAP_HOME", "~/.config/modelm-remap"))
+BACKUP_DIR = os.path.join(CONFIG_DIR, "backups")
+
+# --------------------------------------------------------------------------- #
+# Key table (Soarer's Converter token -> USB HID usage id)
+# --------------------------------------------------------------------------- #
+
+KEY_CODES = {
+    ("LCTRL", 0x01), ("LSHIFT", 0x02), ("LALT", 0x04), ("LGUI", 0x08),
+    ("RCTRL", 0x10), ("RSHIFT", 0x20), ("RALT", 0x40), ("RGUI", 0x80),
+    ("CTRL", 0x11), ("SHIFT", 0x22), ("ALT", 0x44), ("GUI", 0x88), ("ALL", 0xFF),
+    ("UNASSIGNED", 0x00), ("OVERRUN_ERROR", 0x01), ("POST_FAIL", 0x02), ("ERROR_UNDEFINED", 0x03),
+    ("A", 0x04), ("B", 0x05), ("C", 0x06), ("D", 0x07), ("E", 0x08), ("F", 0x09),
+    ("G", 0x0A), ("H", 0x0B), ("I", 0x0C), ("J", 0x0D), ("K", 0x0E), ("L", 0x0F),
+    ("M", 0x10), ("N", 0x11), ("O", 0x12), ("P", 0x13), ("Q", 0x14), ("R", 0x15),
+    ("S", 0x16), ("T", 0x17), ("U", 0x18), ("V", 0x19), ("W", 0x1A), ("X", 0x1B),
+    ("Y", 0x1C), ("Z", 0x1D),
+    ("1", 0x1E), ("2", 0x1F), ("3", 0x20), ("4", 0x21), ("5", 0x22), ("6", 0x23),
+    ("7", 0x24), ("8", 0x25), ("9", 0x26), ("0", 0x27),
+    ("ENTER", 0x28), ("ESC", 0x29), ("BACKSPACE", 0x2A), ("TAB", 0x2B), ("SPACE", 0x2C),
+    ("MINUS", 0x2D), ("EQUAL", 0x2E), ("LEFT_BRACE", 0x2F), ("RIGHT_BRACE", 0x30),
+    ("BACKSLASH", 0x31), ("EUROPE_1", 0x32), ("SEMICOLON", 0x33), ("QUOTE", 0x34),
+    ("BACK_QUOTE", 0x35), ("COMMA", 0x36), ("PERIOD", 0x37), ("SLASH", 0x38),
+    ("CAPS_LOCK", 0x39),
+    ("F1", 0x3A), ("F2", 0x3B), ("F3", 0x3C), ("F4", 0x3D), ("F5", 0x3E), ("F6", 0x3F),
+    ("F7", 0x40), ("F8", 0x41), ("F9", 0x42), ("F10", 0x43), ("F11", 0x44), ("F12", 0x45),
+    ("PRINTSCREEN", 0x46), ("SCROLL_LOCK", 0x47), ("PAUSE", 0x48), ("INSERT", 0x49),
+    ("HOME", 0x4A), ("PAGE_UP", 0x4B), ("DELETE", 0x4C), ("END", 0x4D), ("PAGE_DOWN", 0x4E),
+    ("RIGHT", 0x4F), ("LEFT", 0x50), ("DOWN", 0x51), ("UP", 0x52),
+    ("NUM_LOCK", 0x53), ("PAD_SLASH", 0x54), ("PAD_ASTERIX", 0x55), ("PAD_MINUS", 0x56),
+    ("PAD_PLUS", 0x57), ("PAD_ENTER", 0x58),
+    ("PAD_1", 0x59), ("PAD_2", 0x5A), ("PAD_3", 0x5B), ("PAD_4", 0x5C), ("PAD_5", 0x5D),
+    ("PAD_6", 0x5E), ("PAD_7", 0x5F), ("PAD_8", 0x60), ("PAD_9", 0x61), ("PAD_0", 0x62),
+    ("PAD_PERIOD", 0x63), ("EUROPE_2", 0x64), ("APP", 0x65), ("POWER", 0x66), ("PAD_EQUALS", 0x67),
+    ("F13", 0x68), ("F14", 0x69), ("F15", 0x6A), ("F16", 0x6B), ("F17", 0x6C), ("F18", 0x6D),
+    ("F19", 0x6E), ("F20", 0x6F), ("F21", 0x70), ("F22", 0x71), ("F23", 0x72), ("F24", 0x73),
+    ("EXECUTE", 0x74), ("HELP", 0x75), ("MENU", 0x76), ("SELECT", 0x77), ("STOP", 0x78),
+    ("AGAIN", 0x79), ("UNDO", 0x7A), ("CUT", 0x7B), ("COPY", 0x7C), ("PASTE", 0x7D),
+    ("FIND", 0x7E), ("MUTE", 0x7F), ("VOLUME_UP", 0x80), ("VOLUME_DOWN", 0x81),
+    ("LOCKING_CAPS_LOCK", 0x82), ("LOCKING_NUM_LOCK", 0x83), ("LOCKING_SCROLL_LOCK", 0x84),
+    ("PAD_COMMA", 0x85), ("EQUAL_SIGN", 0x86),
+    ("INTERNATIONAL_1", 0x87), ("INTERNATIONAL_2", 0x88), ("INTERNATIONAL_3", 0x89),
+    ("INTERNATIONAL_4", 0x8A), ("INTERNATIONAL_5", 0x8B), ("INTERNATIONAL_6", 0x8C),
+    ("INTERNATIONAL_7", 0x8D), ("INTERNATIONAL_8", 0x8E), ("INTERNATIONAL_9", 0x8F),
+    ("LANG_1", 0x90), ("LANG_2", 0x91), ("LANG_3", 0x92), ("LANG_4", 0x93), ("LANG_5", 0x94),
+    ("LANG_6", 0x95), ("LANG_7", 0x96), ("LANG_8", 0x97), ("LANG_9", 0x98),
+    ("ALTERNATE_ERASE", 0x99), ("SYSREQ_ATTN", 0x9A), ("CANCEL", 0x9B), ("CLEAR", 0x9C),
+    ("PRIOR", 0x9D), ("RETURN", 0x9E), ("SEPARATOR", 0x9F), ("OUT", 0xA0), ("OPER", 0xA1),
+    ("CLEAR_AGAIN", 0xA2), ("CRSEL_PROPS", 0xA3), ("EXSEL", 0xA4),
+    ("SYSTEM_POWER", 0xA8), ("SYSTEM_SLEEP", 0xA9), ("SYSTEM_WAKE", 0xAA),
+    ("AUX1", 0xAB), ("AUX2", 0xAC), ("AUX3", 0xAD), ("AUX4", 0xAE), ("AUX5", 0xAF),
+    ("EXTRA_LALT", 0xB1), ("EXTRA_PAD_PLUS", 0xB2), ("EXTRA_RALT", 0xB3), ("EXTRA_EUROPE_2", 0xB4),
+    ("EXTRA_BACKSLASH", 0xB5), ("EXTRA_INSERT", 0xB6),
+    ("EXTRA_F1", 0xB7), ("EXTRA_F2", 0xB8), ("EXTRA_F3", 0xB9), ("EXTRA_F4", 0xBA), ("EXTRA_F5", 0xBB),
+    ("EXTRA_F6", 0xBC), ("EXTRA_F7", 0xBD), ("EXTRA_F8", 0xBE), ("EXTRA_F9", 0xBF), ("EXTRA_F10", 0xC0),
+    ("EXTRA_SYSRQ", 0xC2),
+    ("FN1", 0xD0), ("FN2", 0xD1), ("FN3", 0xD2), ("FN4", 0xD3), ("FN5", 0xD4), ("FN6", 0xD5),
+    ("FN7", 0xD6), ("FN8", 0xD7),
+    ("SELECT_0", 0xD8), ("SELECT_1", 0xD9), ("SELECT_2", 0xDA), ("SELECT_3", 0xDB),
+    ("SELECT_4", 0xDC), ("SELECT_5", 0xDD), ("SELECT_6", 0xDE), ("SELECT_7", 0xDF),
+    ("MEDIA_NEXT_TRACK", 0xE8), ("MEDIA_PREV_TRACK", 0xE9), ("MEDIA_STOP", 0xEA),
+    ("MEDIA_PLAY_PAUSE", 0xEB), ("MEDIA_MUTE", 0xEC), ("MEDIA_BASS_BOOST", 0xED),
+    ("MEDIA_LOUDNESS", 0xEE), ("MEDIA_VOLUME_UP", 0xEF), ("MEDIA_VOLUME_DOWN", 0xF0),
+    ("MEDIA_BASS_UP", 0xF1), ("MEDIA_BASS_DOWN", 0xF2), ("MEDIA_TREBLE_UP", 0xF3),
+    ("MEDIA_TREBLE_DOWN", 0xF4), ("MEDIA_MEDIA_SELECT", 0xF5), ("MEDIA_MAIL", 0xF6),
+    ("MEDIA_CALCULATOR", 0xF7), ("MEDIA_MY_COMPUTER", 0xF8), ("MEDIA_WWW_SEARCH", 0xF9),
+    ("MEDIA_WWW_HOME", 0xFA), ("MEDIA_WWW_BACK", 0xFB), ("MEDIA_WWW_FORWARD", 0xFC),
+    ("MEDIA_WWW_STOP", 0xFD), ("MEDIA_WWW_REFRESH", 0xFE), ("MEDIA_WWW_FAVORITES", 0xFF),
+}
+
+KNOWN = {name for name, _ in KEY_CODES}
+CODES = dict(KEY_CODES)
+NAME_BY_CODE = {}
+for _name, _code in KEY_CODES:
+    if not _name.startswith("FAKE_") and _code not in NAME_BY_CODE:
+        NAME_BY_CODE[_code] = _name
+
+# Friendly aliases so people can type what they mean.
+ALIASES = {
+    "CMD": "LGUI", "COMMAND": "LGUI", "SUPER": "LGUI", "WIN": "LGUI",
+    "WINDOWS": "LGUI", "META": "LGUI", "APPLE": "LGUI",
+    "RCMD": "RGUI", "RCOMMAND": "RGUI",
+    "OPT": "LALT", "OPTION": "LALT", "ROPTION": "RALT", "ROPT": "RALT",
+    "CONTROL": "LCTRL", "RETURN": "ENTER", "CAPSLOCK": "CAPS_LOCK",
+    "CAPS": "CAPS_LOCK", "DEL": "DELETE", "PGUP": "PAGE_UP", "PGDN": "PAGE_DOWN",
+    "PRTSC": "PRINTSCREEN", "PRTSCR": "PRINTSCREEN",
+}
+
+# Human labels for the menu (only the curated ones; anything else gets its name).
+LABELS = {
+    "LGUI": "Command (left)   \u2318", "RGUI": "Command (right)  \u2318",
+    "GUI": "Command (either) \u2318", "LALT": "Option (left)    \u2325",
+    "RALT": "Option (right)   \u2325", "LCTRL": "Control (left)   \u2303",
+    "RCTRL": "Control (right)  \u2303", "LSHIFT": "Shift (left)     \u21e7",
+    "RSHIFT": "Shift (right)    \u21e7",
+    "ENTER": "Return", "ESC": "Escape", "TAB": "Tab", "BACKSPACE": "Backspace",
+    "DELETE": "Delete (forward)", "SPACE": "Space", "CAPS_LOCK": "Caps Lock",
+    "PRINTSCREEN": "Print Screen", "SCROLL_LOCK": "Scroll Lock", "PAUSE": "Pause",
+    "UP": "Up arrow", "DOWN": "Down arrow", "LEFT": "Left arrow", "RIGHT": "Right arrow",
+    "HOME": "Home", "END": "End", "PAGE_UP": "Page Up", "PAGE_DOWN": "Page Down",
+    "INSERT": "Insert", "MENU": "Menu", "APP": "Application / Menu",
+    "NUM_LOCK": "Num Lock", "UNASSIGNED": "disable the key",
+    "MEDIA_VOLUME_UP": "Volume Up", "MEDIA_VOLUME_DOWN": "Volume Down",
+    "MEDIA_MUTE": "Mute", "MEDIA_PLAY_PAUSE": "Play / Pause",
+    "MEDIA_NEXT_TRACK": "Next Track", "MEDIA_PREV_TRACK": "Previous Track",
+    "MEDIA_STOP": "Stop", "MEDIA_WWW_HOME": "WWW Home",
+    "MEDIA_CALCULATOR": "Calculator", "MEDIA_MAIL": "Mail",
+}
+
+# Menu groups, in display order. Command-related keys come first on purpose.
+MENU_GROUPS = [
+    ("Command / Mac modifiers", ["LGUI", "RGUI", "GUI", "LALT", "RALT",
+                                  "LCTRL", "RCTRL", "LSHIFT", "RSHIFT"]),
+    ("Common keys", ["ENTER", "ESC", "TAB", "BACKSPACE", "DELETE", "SPACE",
+                     "CAPS_LOCK", "PRINTSCREEN", "SCROLL_LOCK", "PAUSE"]),
+    ("Navigation", ["UP", "DOWN", "LEFT", "RIGHT", "HOME", "END",
+                    "PAGE_UP", "PAGE_DOWN", "INSERT", "MENU", "APP"]),
+    ("Function keys", ["F%d" % i for i in range(1, 25)]),
+    ("Keypad", ["NUM_LOCK", "PAD_SLASH", "PAD_ASTERIX", "PAD_MINUS", "PAD_PLUS",
+                "PAD_ENTER", "PAD_PERIOD", "PAD_EQUALS"] +
+               ["PAD_%d" % i for i in range(10)]),
+    ("Media", ["MEDIA_VOLUME_UP", "MEDIA_VOLUME_DOWN", "MEDIA_MUTE",
+               "MEDIA_PLAY_PAUSE", "MEDIA_NEXT_TRACK", "MEDIA_PREV_TRACK",
+               "MEDIA_STOP", "MEDIA_WWW_HOME", "MEDIA_CALCULATOR", "MEDIA_MAIL"]),
+    ("Disable", ["UNASSIGNED"]),
+]
+
+# --------------------------------------------------------------------------- #
+# Tool plumbing
+# --------------------------------------------------------------------------- #
+
+class ToolError(Exception):
+    pass
+
+
+def find_bindir():
+    env = os.environ.get("MODELM_REMAP_BIN")
+    cands = [env, os.path.join(HERE, "vendor", "bin")] if env else [os.path.join(HERE, "vendor", "bin")]
+    for d in cands:
+        if d and all(os.path.exists(os.path.join(d, t)) for t in ("scas", "scdis", "sctool")):
+            return d
+    if all(shutil.which(t) for t in ("scas", "scdis", "sctool")):
+        return None  # use PATH
+    raise ToolError(
+        "the Soarer's Converter tools are missing.\n"
+        "Build them once with:  %s/build.sh" % HERE
+    )
+
+
+BINDIR = None
+
+
+def tool(name):
+    return name if BINDIR is None else os.path.join(BINDIR, name)
+
+
+def run(cmd, check=True):
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                          universal_newlines=True)
+    if check and proc.returncode != 0:
+        raise ToolError("`%s` failed:\n%s" % (" ".join(cmd), proc.stdout.strip()))
+    return proc.stdout
+
+
+def device_info():
+    out = run([tool("sctool"), "info"], check=False)
+    if "No devices found" in out or "Protocol Version" not in out:
+        raise ToolError(
+            "no Soarer's Converter found (USB %s).\n"
+            "Check the adapter is plugged in and the keyboard cable is seated." % VID_PID)
+    info = {}
+    for line in out.splitlines():
+        if ":" in line:
+            k, v = line.split(":", 1)
+            info[k.strip()] = v.strip()
+    return info
+
+
+def _tmpdir():
+    return tempfile.mkdtemp(prefix="modelm-remap.")
+
+
+def read_device_config():
+    """Return the raw .scb bytes currently in the converter, or None."""
+    d = _tmpdir()
+    path = os.path.join(d, "current.scb")
+    out = run([tool("sctool"), "read", path], check=False)
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        if "No devices found" in out:
+            raise ToolError("no Soarer's Converter found.")
+        return None
+    with open(path, "rb") as fh:
+        return fh.read()
+
+
+def disassemble(scb_bytes):
+    d = _tmpdir()
+    scb = os.path.join(d, "in.scb")
+    sc = os.path.join(d, "out.sc")
+    with open(scb, "wb") as fh:
+        fh.write(scb_bytes)
+    run([tool("scdis"), scb, sc])
+    with open(sc) as fh:
+        return fh.read()
+
+
+def assemble(sc_text):
+    d = _tmpdir()
+    sc = os.path.join(d, "in.sc")
+    scb = os.path.join(d, "out.scb")
+    with open(sc, "w") as fh:
+        fh.write(sc_text)
+    out = run([tool("scas"), sc, scb], check=False)
+    if not os.path.exists(scb):
+        raise ToolError("could not assemble the config:\n%s" % out.strip())
+    with open(scb, "rb") as fh:
+        return fh.read()
+
+
+def write_device_config(scb_bytes):
+    d = _tmpdir()
+    path = os.path.join(d, "new.scb")
+    with open(path, "wb") as fh:
+        fh.write(scb_bytes)
+    out = run([tool("sctool"), "write", path], check=False)
+    if "Transfer complete" not in out:
+        raise ToolError("the converter rejected the write:\n%s" % out.strip())
+    return out
+
+
+def backup(scb_bytes):
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    scb = os.path.join(BACKUP_DIR, stamp + ".scb")
+    with open(scb, "wb") as fh:
+        fh.write(scb_bytes)
+    try:
+        with open(os.path.join(BACKUP_DIR, stamp + ".sc"), "w") as fh:
+            fh.write(disassemble(scb_bytes))
+    except ToolError:
+        pass
+    return scb
+
+
+# --------------------------------------------------------------------------- #
+# listen: read key events from the converter's diagnostic interface
+# --------------------------------------------------------------------------- #
+
+# Output looks like:  r62 +93 (LANG_4) d93 (LANG_4) rE2 -93 (LANG_4) u93 (LANG_4)
+# '+' is the key-press event; '-' is release (see Soarer's docs/config.html).
+EVENT_RE = re.compile(rb"([+\-du])([0-9A-Fa-f]{2})\s*\(([A-Z0-9_]+)\)")
+
+
+def stream_events(on_event, timeout=None):
+    """Run `sctool listen` and call on_event(prefix, code, name).
+
+    on_event returns True to stop. Returns when stopped, when timeout expires,
+    or when the stream ends.
+    """
+    proc = subprocess.Popen([tool("sctool"), "listen"],
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    fd = proc.stdout.fileno()
+    buf = b""
+    start = time.time()
+    try:
+        while True:
+            if timeout is not None and time.time() - start > timeout:
+                return
+            ready, _, _ = select.select([fd], [], [], 0.25)
+            if not ready:
+                continue
+            chunk = os.read(fd, 4096)
+            if not chunk:
+                return
+            buf += chunk
+            while True:
+                m = EVENT_RE.search(buf)
+                if not m:
+                    if len(buf) > 16:
+                        buf = buf[-16:]
+                    break
+                prefix = m.group(1).decode()
+                code = int(m.group(2), 16)
+                name = m.group(3).decode()
+                buf = buf[m.end():]
+                if on_event(prefix, code, name):
+                    return
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        drain_stdin()
+
+
+def drain_stdin():
+    """Keypresses typed while listening also land in the tty input queue."""
+    try:
+        import termios
+        termios.tcflush(sys.stdin, termios.TCIFLUSH)
+    except Exception:
+        pass
+
+
+def capture_key(timeout=60):
+    """Wait for one physical key press; return (name, code)."""
+    hit = {}
+
+    def on_event(prefix, code, name):
+        if prefix in ("+", "d"):
+            hit["name"], hit["code"] = name, code
+            return True
+        return False
+
+    stream_events(on_event, timeout=timeout)
+    if not hit:
+        raise ToolError("no key press detected (timed out).")
+    return hit["name"], hit["code"]
+
+
+# --------------------------------------------------------------------------- #
+# Config editing
+# --------------------------------------------------------------------------- #
+
+def merge_remap(sc_text, src, dst):
+    """Return sc_text with `src` remapped to `dst` in the first remapblock."""
+    lines = [l for l in sc_text.splitlines()
+             if l.strip() and not l.lstrip().startswith("#")]
+    new_line = "\t%s %s" % (src, dst)
+
+    start = next((i for i, l in enumerate(lines) if l.strip().lower() == "remapblock"), None)
+    if start is None:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines += ["remapblock", "layer 0", new_line, "endblock"]
+        return "\n".join(lines) + "\n"
+
+    end = next((i for i in range(start + 1, len(lines))
+                if lines[i].strip().lower() == "endblock"), len(lines))
+    kept = [l for l in lines[start + 1:end]
+            if not (len(l.split()) >= 2 and l.split()[0].upper() == src.upper())]
+    kept.append(new_line)
+    lines = lines[:start + 1] + kept + lines[end:]
+    return "\n".join(lines) + "\n"
+
+
+def apply_remap(src, dst, dry_run=False, assume_yes=False):
+    info = device_info()
+    src = resolve_name(src)
+    dst = resolve_name(dst)
+
+    if src == dst:
+        raise ToolError("%s is already %s — nothing to do." % (src, dst))
+
+    scb = read_device_config()
+    if scb is None:
+        sc_text = "remapblock\nlayer 0\n\t%s %s\nendblock\n" % (src, dst)
+    else:
+        sc_text = merge_remap(disassemble(scb), src, dst)
+
+    new_scb = assemble(sc_text)
+
+    print("\n  New configuration")
+    print("  " + "-" * 40)
+    for line in sc_text.rstrip().splitlines():
+        print("    " + line)
+    print("  " + "-" * 40)
+    print("  %s  ->  %s" % (src, label(dst)))
+
+    if dry_run:
+        print("\n  --dry-run: nothing written to the converter.")
+        return
+
+    if not assume_yes and not confirm("\n  Write this to the converter? [y/N] "):
+        print("  aborted.")
+        return
+
+    if scb is not None:
+        path = backup(scb)
+        print("  backup: %s" % path)
+
+    write_device_config(new_scb)
+
+    # verify
+    check = read_device_config()
+    ok = check is not None and check == new_scb
+    print("  %s" % ("written and verified." if ok else "written (verification differed!)."))
+
+
+def resolve_name(name):
+    """Normalise user input to a Soarer's Converter token."""
+    up = name.strip().upper()
+    if up in KNOWN:
+        return up
+    if up in ALIASES:
+        return ALIASES[up]
+    raise ToolError("unknown key %r. Run `%s keys` to see valid names." % (name, APP))
+
+
+def label(name):
+    return LABELS.get(name, name)
+
+
+# --------------------------------------------------------------------------- #
+# UI helpers
+# --------------------------------------------------------------------------- #
+
+def confirm(prompt):
+    try:
+        return input(prompt).strip().lower() in ("y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+
+
+def banner(info):
+    print("%s  ·  Soarer's Converter" % APP)
+    print("  adapter  Soarer's Keyboard Converter  (USB %s)" % VID_PID)
+    print("  firmware %s   EEPROM %s (%s free)" % (
+        info.get("Code Version", "?"),
+        info.get("EEPROM Size", "?"),
+        info.get("EEPROM Free", "?")))
+
+
+def show_menu():
+    idx = 0
+    index = {}
+    for title, names in MENU_GROUPS:
+        print("\n  %s" % title)
+        for name in names:
+            idx += 1
+            index[str(idx)] = name
+            lab = LABELS.get(name)
+            if lab:
+                print("    %3d  %-14s %s" % (idx, name, lab))
+            else:
+                print("    %3d  %s" % (idx, name))
+    print("\n    letters, digits and symbols: just type them (A, 1, MINUS, LEFT_BRACE, ...)")
+    print("    type a name directly, or '?' to search, or 'q' to quit")
+    return index
+
+
+def choose_target(src):
+    index = show_menu()
+    while True:
+        try:
+            ans = input("\n  What should %s become? > " % src).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            raise ToolError("aborted.")
+        if not ans:
+            continue
+        if ans.lower() in ("q", "quit"):
+            raise ToolError("aborted.")
+        if ans == "?" or ans.lower() == "search":
+            term = input("  search key names: ").strip().upper()
+            matches = sorted(n for n in KNOWN if term in n)
+            if not matches:
+                print("  no match.")
+                continue
+            print("  " + ", ".join(matches))
+            continue
+        if ans in index:
+            return index[ans]
+        try:
+            return resolve_name(ans)
+        except ToolError as exc:
+            print("  %s" % exc)
+
+
+# --------------------------------------------------------------------------- #
+# Commands
+# --------------------------------------------------------------------------- #
+
+def cmd_wizard(args):
+    info = device_info()
+    banner(info)
+    print("\nSTEP 1 — Press the key you want to remap.")
+    print("  Press it on the IBM Model M now (Ctrl-C to abort)…\n")
+    if args.src:
+        src = resolve_name(args.src)
+        code = next((c for n, c in KEY_CODES if n == src), None)
+        print("  using key from --from: %s" % src)
+    else:
+        src, code = capture_key(timeout=args.timeout)
+        print("  \u2714 Detected: %s  (%s, code 0x%02X)" % (src, label(src), code))
+    if src == "UNASSIGNED":
+        raise ToolError("the converter reported UNASSIGNED for that key; try again.")
+    print("\nSTEP 2 — What should %s do?" % src)
+    dst = resolve_name(args.to) if args.to else choose_target(src)
+    apply_remap(src, dst, dry_run=args.dry_run, assume_yes=args.yes)
+
+
+def cmd_set(args):
+    apply_remap(args.src, args.to, dry_run=args.dry_run, assume_yes=args.yes)
+
+
+def cmd_listen(args):
+    info = device_info()
+    banner(info)
+    print("\nListening… press keys on the keyboard (Ctrl-C to stop).")
+    print("  %-16s %-6s %s" % ("KEY", "CODE", "EVENT"))
+
+    def on_event(prefix, code, name):
+        kind = {"+": "press", "d": "press", "-": "release", "u": "release"}.get(prefix, prefix)
+        print("  %-16s 0x%02X   %s" % (name, code, kind))
+        return False
+
+    try:
+        stream_events(on_event)
+    except KeyboardInterrupt:
+        pass
+    print("\nstopped.")
+
+
+def cmd_show(args):
+    info = device_info()
+    banner(info)
+    scb = read_device_config()
+    if scb is None:
+        print("\n  (converter has no config yet)")
+        return
+    print("\n  Current configuration")
+    print("  " + "-" * 40)
+    for line in disassemble(scb).rstrip().splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        print("    " + line)
+    print("  " + "-" * 40)
+
+
+def cmd_info(args):
+    out = run([tool("sctool"), "info"], check=False)
+    print(out.rstrip())
+    if "No devices found" in out:
+        sys.exit(1)
+
+
+def cmd_keys(args):
+    term = (args.pattern or "").upper()
+    names = sorted(n for n in KNOWN if not n.startswith("FAKE_") and term in n)
+    for n in names:
+        lab = LABELS.get(n, "")
+        print("%-22s 0x%02X  %s" % (n, CODES[n], lab))
+    print("\n%d key names." % len(names))
+
+
+def cmd_read(args):
+    scb = read_device_config()
+    if scb is None:
+        raise ToolError("converter has no config to read.")
+    with open(args.file, "wb") as fh:
+        fh.write(scb)
+    print("wrote %s (%d bytes)" % (args.file, len(scb)))
+
+
+def cmd_restore(args):
+    with open(args.file, "rb") as fh:
+        scb = fh.read()
+    if not scb.startswith(b"SC"):
+        raise ToolError("%s is not a Soarer's Converter .scb file." % args.file)
+    print("restoring %d bytes from %s" % (len(scb), args.file))
+    if not args.yes and not confirm("  Overwrite the converter config? [y/N] "):
+        print("  aborted.")
+        return
+    cur = read_device_config()
+    if cur is not None:
+        print("  backup: %s" % backup(cur))
+    write_device_config(scb)
+    print("  restored.")
+
+
+# --------------------------------------------------------------------------- #
+# Entry point
+# --------------------------------------------------------------------------- #
+
+def build_parser():
+    p = argparse.ArgumentParser(
+        prog=APP,
+        description="Remap keys on an IBM Model M through a Soarer's Converter.",
+        epilog="With no command, the interactive wizard runs: press a key, then pick "
+               "what it becomes (Command / Option / ... first).")
+    p.add_argument("--bin-dir", help="directory holding scas/scdis/sctool")
+    p.add_argument("--dry-run", action="store_true",
+                   help="show the result without writing to the converter")
+    p.add_argument("--yes", "-y", action="store_true", help="skip confirmation")
+    p.add_argument("--from", dest="src", help="source key (skip key capture)")
+    p.add_argument("--to", help="target key (skip the menu)")
+    p.add_argument("--timeout", type=int, default=60, help="key-capture timeout in seconds")
+    p.set_defaults(func=cmd_wizard)
+
+    sub = p.add_subparsers(dest="cmd", metavar="command")
+
+    def add_common(sp):
+        sp.add_argument("--dry-run", action="store_true",
+                        help="show the result without writing to the converter")
+        sp.add_argument("--yes", "-y", action="store_true", help="skip confirmation")
+
+    w = sub.add_parser("wizard", help="interactive: press a key, choose what it becomes")
+    add_common(w)
+    w.add_argument("--from", dest="src", help="skip capture and use this source key")
+    w.add_argument("--to", help="skip the menu and use this target key")
+    w.add_argument("--timeout", type=int, default=60, help="capture timeout in seconds")
+    w.set_defaults(func=cmd_wizard)
+
+    s = sub.add_parser("set", help="remap FROM to TO non-interactively")
+    add_common(s)
+    s.add_argument("src")
+    s.add_argument("to")
+    s.set_defaults(func=cmd_set)
+
+    l = sub.add_parser("listen", help="print keys as you press them")
+    l.set_defaults(func=cmd_listen)
+
+    sh = sub.add_parser("show", help="show the config stored in the converter")
+    sh.set_defaults(func=cmd_show)
+
+    i = sub.add_parser("info", help="show firmware / EEPROM info")
+    i.set_defaults(func=cmd_info)
+
+    k = sub.add_parser("keys", help="list valid key names")
+    k.add_argument("pattern", nargs="?", help="substring filter")
+    k.set_defaults(func=cmd_keys)
+
+    r = sub.add_parser("read", help="save the converter config to a file")
+    r.add_argument("file")
+    r.set_defaults(func=cmd_read)
+
+    rs = sub.add_parser("restore", help="write a saved .scb config back")
+    rs.add_argument("file")
+    rs.add_argument("--yes", "-y", action="store_true")
+    rs.set_defaults(func=cmd_restore)
+
+    return p
+
+
+def main(argv=None):
+    global BINDIR
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
+    parser = build_parser()
+    argv = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(argv)
+    try:
+        BINDIR = args.bin_dir or find_bindir()
+        return args.func(args)
+    except ToolError as exc:
+        print("\n%s: %s" % (APP, exc), file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print()
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())
