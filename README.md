@@ -56,6 +56,7 @@ modelm-remap select-all               # press a key -> Cmd+A
 modelm-remap copy --from F10          # same, trigger key given up front
 modelm-remap macro                    # press a key -> choose a shortcut to send
 modelm-remap shortcut F10 CMD+SHIFT+4 # non-interactive shortcut macro
+modelm-remap shortcuts                # list the named shortcuts
 modelm-remap listen                   # print keys as you press them
 modelm-remap show                     # config currently stored in the converter
 modelm-remap keys CMD                 # list/search valid key names
@@ -118,9 +119,21 @@ modelm-remap shortcut F10 CMD+SHIFT+4 # or name the chord yourself
 
 `modelm-remap shortcut` accepts any trigger key and a chord built from
 modifiers (`CMD`, `SHIFT`, `CTRL`, `OPT`, and their `R…`/right-hand forms) plus
-one ordinary key. Built-in shortcuts — `SCREENSHOT` (⌘⇧4), `COPY` (⌘C),
-`PASTE` (⌘V), `SELECT_ALL` (⌘A) — are aliases for their chords, so
-`shortcut F10 COPY` works too.
+one ordinary key. Run `modelm-remap shortcuts` to list the built-in names; each
+is just an alias for its chord, so `shortcut F10 COPY` and `macro --to UNDO`
+work too.
+
+| Editing | Text navigation | Screenshots | System |
+|---|---|---|---|
+| `CUT` ⌘X | `HOME` ⌘← | `SCREENSHOT` ⌘⇧4 | `SPOTLIGHT` ⌘␣ |
+| `COPY` ⌘C | `END` ⌘→ | `SCREENSHOT_FULL` ⌘⇧3 | `EMOJI` ⌃⌘␣ |
+| `PASTE` ⌘V | `WORD_LEFT` ⌥← | `SCREENSHOT_CLIPBOARD` ⌃⌘⇧4 | `LOCK_SCREEN` ⌃⌘Q |
+| `UNDO` ⌘Z | `WORD_RIGHT` ⌥→ | `SCREENSHOT_OPTIONS` ⌘⇧5 | `FORCE_QUIT` ⌥⌘⎋ |
+| `REDO` ⌘⇧Z | `DELETE_WORD` ⌥⌫ | | `MISSION_CONTROL` ⌃↑ |
+| `SELECT_ALL` ⌘A | `DELETE_LINE_START` ⌘⌫ | | |
+| `FIND` ⌘F | | | |
+| `SAVE` ⌘S | | | |
+
 The resulting config is a normal macro you can also edit by hand:
 
 ```

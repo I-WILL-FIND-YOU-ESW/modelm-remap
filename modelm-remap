@@ -22,6 +22,7 @@ Examples
   modelm-remap listen              print keys as you press them
   modelm-remap show                show the config currently in the converter
   modelm-remap keys                list all valid key names
+  modelm-remap shortcuts           list the named shortcuts (Copy, Undo, ...)
   modelm-remap info                firmware / EEPROM info
 """
 
@@ -164,22 +165,33 @@ MODIFIERS = {
 # Named shortcuts (macros) the tool can write. A shortcut is a chord of
 # modifiers plus one ordinary key; the converter synthesises it from one press.
 SHORTCUTS = {
-    "SCREENSHOT": {
-        "label": "Screenshot \u2014 select a region  (\u2318\u21e74)",
-        "chord": "CMD+SHIFT+4",
-    },
-    "COPY": {
-        "label": "Copy  (\u2318C)",
-        "chord": "CMD+C",
-    },
-    "PASTE": {
-        "label": "Paste  (\u2318V)",
-        "chord": "CMD+V",
-    },
-    "SELECT_ALL": {
-        "label": "Select all  (\u2318A)",
-        "chord": "CMD+A",
-    },
+    # Editing
+    "CUT":       {"label": "Cut  (\u2318X)",        "chord": "CMD+X"},
+    "COPY":      {"label": "Copy  (\u2318C)",       "chord": "CMD+C"},
+    "PASTE":     {"label": "Paste  (\u2318V)",      "chord": "CMD+V"},
+    "UNDO":      {"label": "Undo  (\u2318Z)",       "chord": "CMD+Z"},
+    "REDO":      {"label": "Redo  (\u2318\u21e7Z)", "chord": "CMD+SHIFT+Z"},
+    "SELECT_ALL": {"label": "Select all  (\u2318A)", "chord": "CMD+A"},
+    "FIND":      {"label": "Find  (\u2318F)",       "chord": "CMD+F"},
+    "SAVE":      {"label": "Save  (\u2318S)",       "chord": "CMD+S"},
+    # Text navigation
+    "HOME":      {"label": "Start of line  (\u2318\u2190)",  "chord": "CMD+LEFT"},
+    "END":       {"label": "End of line  (\u2318\u2192)",    "chord": "CMD+RIGHT"},
+    "WORD_LEFT": {"label": "Word left  (\u2325\u2190)",      "chord": "OPT+LEFT"},
+    "WORD_RIGHT": {"label": "Word right  (\u2325\u2192)",    "chord": "OPT+RIGHT"},
+    "DELETE_WORD": {"label": "Delete word  (\u2325\u232b)",  "chord": "OPT+BACKSPACE"},
+    "DELETE_LINE_START": {"label": "Delete to line start  (\u2318\u232b)", "chord": "CMD+BACKSPACE"},
+    # Screenshots
+    "SCREENSHOT": {"label": "Screenshot region  (\u2318\u21e74)", "chord": "CMD+SHIFT+4"},
+    "SCREENSHOT_FULL": {"label": "Screenshot full screen  (\u2318\u21e73)", "chord": "CMD+SHIFT+3"},
+    "SCREENSHOT_CLIPBOARD": {"label": "Screenshot region to clipboard  (\u2303\u2318\u21e74)", "chord": "CTRL+CMD+SHIFT+4"},
+    "SCREENSHOT_OPTIONS": {"label": "Screenshot options  (\u2318\u21e75)", "chord": "CMD+SHIFT+5"},
+    # System
+    "SPOTLIGHT": {"label": "Spotlight  (\u2318\u2423)",      "chord": "CMD+SPACE"},
+    "EMOJI":     {"label": "Emoji & symbols  (\u2303\u2318\u2423)", "chord": "CTRL+CMD+SPACE"},
+    "LOCK_SCREEN": {"label": "Lock screen  (\u2303\u2318Q)", "chord": "CTRL+CMD+Q"},
+    "FORCE_QUIT": {"label": "Force quit  (\u2325\u2318\u238b)", "chord": "OPT+CMD+ESC"},
+    "MISSION_CONTROL": {"label": "Mission Control  (\u2303\u2191)", "chord": "CTRL+UP"},
 }
 
 # Menu groups, in display order. Command-related keys come first on purpose.
@@ -845,6 +857,15 @@ def cmd_keys(args):
     print("\n%d key names." % len(names))
 
 
+def cmd_shortcuts(args):
+    term = (args.pattern or "").upper()
+    names = [n for n in SHORTCUTS if term in n]
+    for name in names:
+        spec = SHORTCUTS[name]
+        print("%-22s %-18s %s" % (name, spec["chord"], spec["label"]))
+    print("\n%d shortcuts. Add one with: %s shortcut <KEY> <NAME>" % (len(names), APP))
+
+
 def cmd_read(args):
     scb = read_device_config()
     if scb is None:
@@ -947,6 +968,10 @@ def build_parser():
     k = sub.add_parser("keys", help="list valid key names")
     k.add_argument("pattern", nargs="?", help="substring filter")
     k.set_defaults(func=cmd_keys)
+
+    sl = sub.add_parser("shortcuts", help="list the named shortcuts (Copy, Undo, ...)")
+    sl.add_argument("pattern", nargs="?", help="substring filter")
+    sl.set_defaults(func=cmd_shortcuts)
 
     r = sub.add_parser("read", help="save the converter config to a file")
     r.add_argument("file")
