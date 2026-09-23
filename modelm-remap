@@ -16,6 +16,7 @@ Examples
   modelm-remap screenshot           press a key -> Cmd+Shift+4 (region screenshot)
   modelm-remap copy                 press a key -> Cmd+C
   modelm-remap paste                press a key -> Cmd+V
+  modelm-remap select-all           press a key -> Cmd+A
   modelm-remap macro               press a key -> choose a shortcut to send
   modelm-remap shortcut F10 CMD+SHIFT+4   non-interactive shortcut macro
   modelm-remap listen              print keys as you press them
@@ -174,6 +175,10 @@ SHORTCUTS = {
     "PASTE": {
         "label": "Paste  (\u2318V)",
         "chord": "CMD+V",
+    },
+    "SELECT_ALL": {
+        "label": "Select all  (\u2318A)",
+        "chord": "CMD+A",
     },
 }
 
@@ -779,6 +784,13 @@ def cmd_paste(args):
         "  Press it on the IBM Model M now (Ctrl-C to abort)…\n")
 
 
+def cmd_select_all(args):
+    run_named_shortcut(
+        "SELECT_ALL", args,
+        "\nPress the key that should select all (⌘A).\n"
+        "  Press it on the IBM Model M now (Ctrl-C to abort)…\n")
+
+
 def cmd_shortcut(args):
     apply_macro(args.src, args.chord, dry_run=args.dry_run, assume_yes=args.yes)
 
@@ -915,6 +927,7 @@ def build_parser():
                 cmd_screenshot)
     add_capture("copy", "press a key -> copy (Cmd+C)", cmd_copy)
     add_capture("paste", "press a key -> paste (Cmd+V)", cmd_paste)
+    add_capture("select-all", "press a key -> select all (Cmd+A)", cmd_select_all)
 
     sh2 = sub.add_parser("shortcut", help="map a trigger key to a chord non-interactively")
     add_common(sh2)
