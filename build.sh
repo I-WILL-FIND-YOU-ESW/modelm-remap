@@ -25,11 +25,16 @@ if [ ! -d "$SRC/src" ]; then
   git clone --depth 1 --recursive https://github.com/thentenaar/sctools.git "$SRC"
 fi
 
-# scdis aborts on a macro that has no meta match condition (e.g. a plain
-# `macro F10`); empty the match string instead so such configs disassemble.
+# Two scdis fixes for macro blocks:
+#  - a macro with no meta match condition (e.g. a plain `macro F10`) aborted
+#    disassembly; emit an empty match string instead.
+#  - get_macrostep_metas() read past the 4-entry `metas[]` array for the high
+#    meta bits, injecting garbage bytes (e.g. 0x03) whenever a step held both
+#    shift and gui (the SHIFT GUI from a screenshot macro); split pairs and
+#    use the 8-entry hmetas[].
 PATCH="$HERE/vendor/patches/scdis-macro-empty-meta.patch"
-if [ -f "$PATCH" ] && ! grep -q 'if (!s) s = strdup("");' "$SRC/src/scdis.c"; then
-  echo "==> applying scdis macro patch"
+if [ -f "$PATCH" ] && git -C "$SRC" apply --check "$PATCH" >/dev/null 2>&1; then
+  echo "==> applying scdis macro patches"
   git -C "$SRC" apply "$PATCH"
 fi
 

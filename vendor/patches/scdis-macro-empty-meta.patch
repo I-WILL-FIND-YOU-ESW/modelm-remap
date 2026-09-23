@@ -1,8 +1,32 @@
 diff --git a/src/scdis.c b/src/scdis.c
-index ff62813..f51991d 100644
+index ff62813..e4e1944 100644
 --- a/src/scdis.c
 +++ b/src/scdis.c
-@@ -260,6 +260,7 @@ static int process_macro(const unsigned char *buf, const unsigned char *bufend)
+@@ -128,12 +128,21 @@ ret:
+ 
+ static char *get_macrostep_metas(int val)
+ {
+-	unsigned int i;
++	unsigned int i, mask;
+ 	char *ret = NULL;
+ 
++	for (i = 0; i < 4; i++) {
++		mask = (unsigned int)((1 << (i + 4)) | (1 << i));
++		if ((val & mask) == mask) {
++			ret = string_append(ret, metas[i], 1);
++			if (!ret) goto ret;
++			val &= (int)~mask;
++		}
++	}
++
+ 	for (i = 0; i < 8; i++) {
+ 		if (val & (1 << i)) {
+-			ret = string_append(ret, metas[i], 1);
++			ret = string_append(ret, hmetas[i], 1);
+ 			if (!ret) goto ret;
+ 		}
+ 	}
+@@ -260,6 +269,7 @@ static int process_macro(const unsigned char *buf, const unsigned char *bufend)
  	}
  
  	s = get_macro_match_metas(buf[1], buf[2]);
