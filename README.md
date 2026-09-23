@@ -49,6 +49,10 @@ modelm-remap                          # interactive wizard (the main flow)
 modelm-remap --from RALT --to LGUI --dry-run   # preview, write nothing
 modelm-remap set RALT LGUI            # non-interactive, with confirmation
 modelm-remap set RCTRL RGUI -y        # no confirmation prompt
+modelm-remap screenshot               # press a key -> Cmd+Shift+4 (region screenshot)
+modelm-remap screenshot --from F10    # same, trigger key given up front
+modelm-remap macro                    # press a key -> choose a shortcut to send
+modelm-remap shortcut F10 CMD+SHIFT+4 # non-interactive shortcut macro
 modelm-remap listen                   # print keys as you press them
 modelm-remap show                     # config currently stored in the converter
 modelm-remap keys CMD                 # list/search valid key names
@@ -93,6 +97,36 @@ layer 0
     RALT LGUI
 endblock
 ```
+
+## Shortcuts (macros)
+
+A plain remap turns one key into one key. A **shortcut** is several keys at
+once — a chord like `⌘⇧4` — so it is stored as a Soarer's Converter *macro*
+that the converter synthesises from a single press:
+
+```sh
+modelm-remap screenshot               # the built-in one: Cmd+Shift+4
+modelm-remap macro                    # pick any shortcut interactively
+modelm-remap shortcut F10 CMD+SHIFT+4 # or name the chord yourself
+```
+
+`modelm-remap shortcut` accepts any trigger key and a chord built from
+modifiers (`CMD`, `SHIFT`, `CTRL`, `OPT`, and their `R…`/right-hand forms) plus
+one ordinary key. A named shortcut (`SCREENSHOT`) is just an alias for its
+chord. The resulting config is a normal macro you can also edit by hand:
+
+```
+macroblock
+	macro EXTRA_F10
+		PUSH_META ASSIGN_META LGUI LSHIFT
+		PRESS 4
+		POP_META
+	endmacro
+endblock
+```
+
+Adding a shortcut for a key that already has a remap replaces that remap, and
+adding one for a key that already has a macro replaces that macro.
 
 ## Mac key reference
 

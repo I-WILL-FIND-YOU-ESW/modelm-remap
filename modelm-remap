@@ -13,6 +13,9 @@ built by ./build.sh. Nothing is compiled on the fly and no daemon is installed.
 Examples
   modelm-remap                     interactive wizard (press a key -> choose target)
   modelm-remap set RALT LGUI       non-interactive remap
+  modelm-remap screenshot           press a key -> Cmd+Shift+4 (region screenshot)
+  modelm-remap macro               press a key -> choose a shortcut to send
+  modelm-remap shortcut F10 CMD+SHIFT+4   non-interactive shortcut macro
   modelm-remap listen              print keys as you press them
   modelm-remap show                show the config currently in the converter
   modelm-remap keys                list all valid key names
@@ -141,6 +144,27 @@ LABELS = {
     "MEDIA_NEXT_TRACK": "Next Track", "MEDIA_PREV_TRACK": "Previous Track",
     "MEDIA_STOP": "Stop", "MEDIA_WWW_HOME": "WWW Home",
     "MEDIA_CALCULATOR": "Calculator", "MEDIA_MAIL": "Mail",
+}
+
+# Modifier tokens accepted in a chord such as "CMD+SHIFT+4". Handed tokens
+# (LGUI/LSHIFT/...) are preferred so the result is unambiguous.
+MODIFIERS = {
+    "CMD": "LGUI", "COMMAND": "LGUI", "SUPER": "LGUI", "WIN": "LGUI",
+    "GUI": "LGUI", "META": "LGUI", "APPLE": "LGUI",
+    "RCMD": "RGUI", "RCOMMAND": "RGUI", "RGUI": "RGUI",
+    "SHIFT": "LSHIFT", "LSHIFT": "LSHIFT", "RSHIFT": "RSHIFT",
+    "CTRL": "LCTRL", "CONTROL": "LCTRL", "LCTRL": "LCTRL", "RCTRL": "RCTRL",
+    "OPT": "LALT", "OPTION": "LALT", "ALT": "LALT", "LALT": "LALT",
+    "ROPT": "RALT", "ROPTION": "RALT", "RALT": "RALT",
+}
+
+# Named shortcuts (macros) the tool can write. A shortcut is a chord of
+# modifiers plus one ordinary key; the converter synthesises it from one press.
+SHORTCUTS = {
+    "SCREENSHOT": {
+        "label": "Screenshot \u2014 select a region  (\u2318\u21e74)",
+        "chord": "CMD+SHIFT+4",
+    },
 }
 
 # Menu groups, in display order. Command-related keys come first on purpose.
@@ -381,6 +405,59 @@ def merge_remap(sc_text, src, dst):
     return "\n".join(lines) + "\n"
 
 
+def _drop_remap(lines, src):
+    """Remove any `src -> ...` entry from the first remapblock."""
+    start = next((i for i, l in enumerate(lines) if l.strip().lower() == "remapblock"), None)
+    if start is None:
+        return lines
+    end = next((i for i in range(start + 1, len(lines))
+                if lines[i].strip().lower() == "endblock"), len(lines))
+    kept = [l for l in lines[start + 1:end]
+            if not (len(l.split()) >= 2 and l.split()[0].upper() == src.upper())]
+    return lines[:start + 1] + kept + lines[end:]
+
+
+def merge_macro(sc_text, key, step_lines):
+    """Return sc_text with a macro for `key` added (replacing any existing one)."""
+    lines = [l for l in sc_text.splitlines()
+             if l.strip() and not l.lstrip().startswith("#")]
+    key = key.upper()
+    lines = _drop_remap(lines, key)
+
+    macro_def = ["\tmacro " + key] + ["\t\t" + s for s in step_lines] + ["\tendmacro"]
+
+    start = next((i for i, l in enumerate(lines) if l.strip().lower() == "macroblock"), None)
+    if start is None:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines += ["macroblock"] + macro_def + ["endblock"]
+        return "\n".join(lines) + "\n"
+
+    end = next((i for i in range(start + 1, len(lines))
+                if lines[i].strip().lower() == "endblock"), len(lines))
+    body, i = [], start + 1
+    while i < end:
+        if lines[i].strip().lower().startswith("macro "):
+            toks = lines[i].split()
+            trigger = toks[1].upper() if len(toks) > 1 else ""
+            block = [lines[i]]
+            i += 1
+            while i < end and lines[i].strip().lower() != "endmacro":
+                block.append(lines[i])
+                i += 1
+            if i < end:
+                block.append(lines[i])
+                i += 1
+            if trigger != key:
+                body += block
+        else:
+            body.append(lines[i])
+            i += 1
+    body += macro_def
+    lines = lines[:start + 1] + body + lines[end:]
+    return "\n".join(lines) + "\n"
+
+
 def apply_remap(src, dst, dry_run=False, assume_yes=False):
     info = device_info()
     src = resolve_name(src)
@@ -424,6 +501,47 @@ def apply_remap(src, dst, dry_run=False, assume_yes=False):
     print("  %s" % ("written and verified." if ok else "written (verification differed!)."))
 
 
+def apply_macro(key, shortcut, dry_run=False, assume_yes=False):
+    device_info()
+    key = resolve_name(key)
+    metas, target = resolve_shortcut(shortcut)
+    step_lines = chord_to_macro_lines(metas, target)
+
+    scb = read_device_config()
+    if scb is None:
+        sc_text = "\n".join(["macroblock", "\tmacro " + key] +
+                            ["\t\t" + s for s in step_lines] +
+                            ["\tendmacro", "endblock", ""])
+    else:
+        sc_text = merge_macro(disassemble(scb), key, step_lines)
+
+    new_scb = assemble(sc_text)
+
+    print("\n  New configuration")
+    print("  " + "-" * 40)
+    for line in sc_text.rstrip().splitlines():
+        print("    " + line)
+    print("  " + "-" * 40)
+    print("  %s  ->  %s" % (key, " + ".join(metas + [target])))
+
+    if dry_run:
+        print("\n  --dry-run: nothing written to the converter.")
+        return
+
+    if not assume_yes and not confirm("\n  Write this to the converter? [y/N] "):
+        print("  aborted.")
+        return
+
+    if scb is not None:
+        print("  backup: %s" % backup(scb))
+
+    write_device_config(new_scb)
+
+    check = read_device_config()
+    ok = check is not None and check == new_scb
+    print("  %s" % ("written and verified." if ok else "written (verification differed!)."))
+
+
 def resolve_name(name):
     """Normalise user input to a Soarer's Converter token."""
     up = name.strip().upper()
@@ -436,6 +554,44 @@ def resolve_name(name):
 
 def label(name):
     return LABELS.get(name, name)
+
+
+META_TOKENS = set(MODIFIERS.values()) | {"CTRL", "SHIFT", "ALT", "GUI", "ALL"}
+
+
+def parse_chord(text):
+    """Parse "CMD+SHIFT+4" into (["LGUI", "LSHIFT"], "4")."""
+    parts = [p.strip() for p in text.split("+")]
+    if len(parts) < 2 or any(not p for p in parts):
+        raise ToolError("a shortcut needs modifiers and a key, e.g. CMD+SHIFT+4")
+    *mods, key = parts
+    metas = []
+    for mod in mods:
+        meta = MODIFIERS.get(mod.upper())
+        if meta is None:
+            raise ToolError("%r is not a modifier (try CMD, SHIFT, CTRL, OPT)." % mod)
+        if meta not in metas:
+            metas.append(meta)
+    target = resolve_name(key)
+    if target in META_TOKENS:
+        raise ToolError("the last part of a shortcut must be an ordinary key.")
+    return metas, target
+
+
+def resolve_shortcut(name):
+    up = name.strip().upper()
+    if up in SHORTCUTS:
+        name = SHORTCUTS[up]["chord"]
+    return parse_chord(name)
+
+
+def chord_to_macro_lines(metas, target):
+    """Return the Soarer's macro steps that emit a shortcut when the key is pressed."""
+    return [
+        "PUSH_META ASSIGN_META " + " ".join(metas),
+        "PRESS " + target,
+        "POP_META",
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -505,6 +661,47 @@ def choose_target(src):
             print("  %s" % exc)
 
 
+def choose_shortcut(src):
+    print("\n  Shortcuts")
+    index, n = {}, 0
+    for name, spec in SHORTCUTS.items():
+        n += 1
+        index[str(n)] = name
+        print("    %3d  %-14s %s" % (n, spec["chord"], spec["label"]))
+    print("    or type a chord directly, e.g. CMD+SHIFT+4")
+    while True:
+        try:
+            ans = input("\n  What shortcut should %s send? > " % src).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            raise ToolError("aborted.")
+        if not ans:
+            continue
+        if ans.lower() in ("q", "quit"):
+            raise ToolError("aborted.")
+        if ans in index:
+            return index[ans]
+        try:
+            resolve_shortcut(ans)
+            return ans
+        except ToolError as exc:
+            print("  %s" % exc)
+
+
+def capture_source(args):
+    """Capture the key to act on (or take it from --from)."""
+    if args.src:
+        src = resolve_name(args.src)
+        code = next((c for n, c in KEY_CODES if n == src), None)
+        print("  using key from --from: %s" % src)
+    else:
+        src, code = capture_key(timeout=args.timeout)
+        print("  \u2714 Detected: %s  (%s, code 0x%02X)" % (src, label(src), code))
+    if src == "UNASSIGNED":
+        raise ToolError("the converter reported UNASSIGNED for that key; try again.")
+    return src
+
+
 # --------------------------------------------------------------------------- #
 # Commands
 # --------------------------------------------------------------------------- #
@@ -530,6 +727,30 @@ def cmd_wizard(args):
 
 def cmd_set(args):
     apply_remap(args.src, args.to, dry_run=args.dry_run, assume_yes=args.yes)
+
+
+def cmd_macro(args):
+    info = device_info()
+    banner(info)
+    print("\nSTEP 1 — Press the key that should send the shortcut.")
+    print("  Press it on the IBM Model M now (Ctrl-C to abort)…\n")
+    src = capture_source(args)
+    print("\nSTEP 2 — Which shortcut?")
+    shortcut = args.to if args.to else choose_shortcut(src)
+    apply_macro(src, shortcut, dry_run=args.dry_run, assume_yes=args.yes)
+
+
+def cmd_screenshot(args):
+    info = device_info()
+    banner(info)
+    print("\nPress the key that should take a region screenshot (⌘⇧4).")
+    print("  Press it on the IBM Model M now (Ctrl-C to abort)…\n")
+    src = capture_source(args)
+    apply_macro(src, "SCREENSHOT", dry_run=args.dry_run, assume_yes=args.yes)
+
+
+def cmd_shortcut(args):
+    apply_macro(args.src, args.chord, dry_run=args.dry_run, assume_yes=args.yes)
 
 
 def cmd_listen(args):
@@ -645,6 +866,25 @@ def build_parser():
     s.add_argument("src")
     s.add_argument("to")
     s.set_defaults(func=cmd_set)
+
+    mc = sub.add_parser("macro", help="press a key -> send a shortcut (macro)")
+    add_common(mc)
+    mc.add_argument("--from", dest="src", help="skip capture and use this trigger key")
+    mc.add_argument("--to", help="shortcut name or chord, e.g. SCREENSHOT or CMD+SHIFT+4")
+    mc.add_argument("--timeout", type=int, default=60, help="capture timeout in seconds")
+    mc.set_defaults(func=cmd_macro)
+
+    sc = sub.add_parser("screenshot", help="press a key -> take a region screenshot (Cmd+Shift+4)")
+    add_common(sc)
+    sc.add_argument("--from", dest="src", help="skip capture and use this trigger key")
+    sc.add_argument("--timeout", type=int, default=60, help="capture timeout in seconds")
+    sc.set_defaults(func=cmd_screenshot)
+
+    sh2 = sub.add_parser("shortcut", help="map a trigger key to a chord non-interactively")
+    add_common(sh2)
+    sh2.add_argument("src")
+    sh2.add_argument("chord")
+    sh2.set_defaults(func=cmd_shortcut)
 
     l = sub.add_parser("listen", help="print keys as you press them")
     l.set_defaults(func=cmd_listen)

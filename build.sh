@@ -25,6 +25,14 @@ if [ ! -d "$SRC/src" ]; then
   git clone --depth 1 --recursive https://github.com/thentenaar/sctools.git "$SRC"
 fi
 
+# scdis aborts on a macro that has no meta match condition (e.g. a plain
+# `macro F10`); empty the match string instead so such configs disassemble.
+PATCH="$HERE/vendor/patches/scdis-macro-empty-meta.patch"
+if [ -f "$PATCH" ] && ! grep -q 'if (!s) s = strdup("");' "$SRC/src/scdis.c"; then
+  echo "==> applying scdis macro patch"
+  git -C "$SRC" apply "$PATCH"
+fi
+
 echo "==> building scas, scdis, sctool"
 "$CC" $CFLAGS -o "$BIN/scas"  "$SRC/src/scas.c"  "$SRC/src/hid_tokens.c" "$SRC/src/macro_tokens.c"
 "$CC" $CFLAGS -o "$BIN/scdis" "$SRC/src/scdis.c" "$SRC/src/hid_tokens.c" "$SRC/src/macro_tokens.c"

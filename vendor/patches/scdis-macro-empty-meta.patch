@@ -1,0 +1,12 @@
+diff --git a/src/scdis.c b/src/scdis.c
+index ff62813..f51991d 100644
+--- a/src/scdis.c
++++ b/src/scdis.c
+@@ -260,6 +260,7 @@ static int process_macro(const unsigned char *buf, const unsigned char *bufend)
+ 	}
+ 
+ 	s = get_macro_match_metas(buf[1], buf[2]);
++	if (!s) s = strdup("");
+ 	if (!s) goto err;
+ 
+ 	fprintf(fout, "macro %s %s # %02X %02X\n",
