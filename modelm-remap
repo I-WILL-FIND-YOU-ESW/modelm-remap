@@ -14,6 +14,8 @@ Examples
   modelm-remap                     interactive wizard (press a key -> choose target)
   modelm-remap set RALT LGUI       non-interactive remap
   modelm-remap screenshot           press a key -> Cmd+Shift+4 (region screenshot)
+  modelm-remap copy                 press a key -> Cmd+C
+  modelm-remap paste                press a key -> Cmd+V
   modelm-remap macro               press a key -> choose a shortcut to send
   modelm-remap shortcut F10 CMD+SHIFT+4   non-interactive shortcut macro
   modelm-remap listen              print keys as you press them
@@ -164,6 +166,14 @@ SHORTCUTS = {
     "SCREENSHOT": {
         "label": "Screenshot \u2014 select a region  (\u2318\u21e74)",
         "chord": "CMD+SHIFT+4",
+    },
+    "COPY": {
+        "label": "Copy  (\u2318C)",
+        "chord": "CMD+C",
+    },
+    "PASTE": {
+        "label": "Paste  (\u2318V)",
+        "chord": "CMD+V",
     },
 }
 
@@ -740,13 +750,33 @@ def cmd_macro(args):
     apply_macro(src, shortcut, dry_run=args.dry_run, assume_yes=args.yes)
 
 
-def cmd_screenshot(args):
+def run_named_shortcut(name, args, prompt):
     info = device_info()
     banner(info)
-    print("\nPress the key that should take a region screenshot (⌘⇧4).")
-    print("  Press it on the IBM Model M now (Ctrl-C to abort)…\n")
+    print(prompt)
     src = capture_source(args)
-    apply_macro(src, "SCREENSHOT", dry_run=args.dry_run, assume_yes=args.yes)
+    apply_macro(src, name, dry_run=args.dry_run, assume_yes=args.yes)
+
+
+def cmd_screenshot(args):
+    run_named_shortcut(
+        "SCREENSHOT", args,
+        "\nPress the key that should take a region screenshot (⌘⇧4).\n"
+        "  Press it on the IBM Model M now (Ctrl-C to abort)…\n")
+
+
+def cmd_copy(args):
+    run_named_shortcut(
+        "COPY", args,
+        "\nPress the key that should copy (⌘C).\n"
+        "  Press it on the IBM Model M now (Ctrl-C to abort)…\n")
+
+
+def cmd_paste(args):
+    run_named_shortcut(
+        "PASTE", args,
+        "\nPress the key that should paste (⌘V).\n"
+        "  Press it on the IBM Model M now (Ctrl-C to abort)…\n")
 
 
 def cmd_shortcut(args):
@@ -874,11 +904,17 @@ def build_parser():
     mc.add_argument("--timeout", type=int, default=60, help="capture timeout in seconds")
     mc.set_defaults(func=cmd_macro)
 
-    sc = sub.add_parser("screenshot", help="press a key -> take a region screenshot (Cmd+Shift+4)")
-    add_common(sc)
-    sc.add_argument("--from", dest="src", help="skip capture and use this trigger key")
-    sc.add_argument("--timeout", type=int, default=60, help="capture timeout in seconds")
-    sc.set_defaults(func=cmd_screenshot)
+    def add_capture(name, help, handler):
+        sp = sub.add_parser(name, help=help)
+        add_common(sp)
+        sp.add_argument("--from", dest="src", help="skip capture and use this trigger key")
+        sp.add_argument("--timeout", type=int, default=60, help="capture timeout in seconds")
+        sp.set_defaults(func=handler)
+
+    add_capture("screenshot", "press a key -> take a region screenshot (Cmd+Shift+4)",
+                cmd_screenshot)
+    add_capture("copy", "press a key -> copy (Cmd+C)", cmd_copy)
+    add_capture("paste", "press a key -> paste (Cmd+V)", cmd_paste)
 
     sh2 = sub.add_parser("shortcut", help="map a trigger key to a chord non-interactively")
     add_common(sh2)

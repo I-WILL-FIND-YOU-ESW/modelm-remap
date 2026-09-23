@@ -50,7 +50,9 @@ modelm-remap --from RALT --to LGUI --dry-run   # preview, write nothing
 modelm-remap set RALT LGUI            # non-interactive, with confirmation
 modelm-remap set RCTRL RGUI -y        # no confirmation prompt
 modelm-remap screenshot               # press a key -> Cmd+Shift+4 (region screenshot)
-modelm-remap screenshot --from F10    # same, trigger key given up front
+modelm-remap copy                     # press a key -> Cmd+C
+modelm-remap paste                    # press a key -> Cmd+V
+modelm-remap copy --from F10          # same, trigger key given up front
 modelm-remap macro                    # press a key -> choose a shortcut to send
 modelm-remap shortcut F10 CMD+SHIFT+4 # non-interactive shortcut macro
 modelm-remap listen                   # print keys as you press them
@@ -106,14 +108,17 @@ that the converter synthesises from a single press:
 
 ```sh
 modelm-remap screenshot               # the built-in one: Cmd+Shift+4
+modelm-remap copy                     # Cmd+C
+modelm-remap paste                    # Cmd+V
 modelm-remap macro                    # pick any shortcut interactively
 modelm-remap shortcut F10 CMD+SHIFT+4 # or name the chord yourself
 ```
 
 `modelm-remap shortcut` accepts any trigger key and a chord built from
 modifiers (`CMD`, `SHIFT`, `CTRL`, `OPT`, and their `R…`/right-hand forms) plus
-one ordinary key. A named shortcut (`SCREENSHOT`) is just an alias for its
-chord. The resulting config is a normal macro you can also edit by hand:
+one ordinary key. Built-in shortcuts — `SCREENSHOT` (⌘⇧4), `COPY` (⌘C),
+`PASTE` (⌘V) — are aliases for their chords, so `shortcut F10 COPY` works too.
+The resulting config is a normal macro you can also edit by hand:
 
 ```
 macroblock
