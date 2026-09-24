@@ -1,185 +1,42 @@
-# modelm-remap
+# 🚨 Request for Resolution – VIP Program Refund (IDR 22,000,000)
 
-Remap keys on an **IBM Model M** that is connected through a **Soarer's
-Converter** adapter — press a key, pick what it should become, and the tool
-rewrites the converter's EEPROM so the change survives unplugging and works on
-any computer.
+Hello,
 
-Built for the common Mac case: the Model M has no Command key, so people remap
-`RALT`/`RCTRL`/`CAPS_LOCK` to **Command**. On macOS, Command is the USB "GUI"
-key, so the target token is `LGUI` (left ⌘) or `RGUI` (right ⌘).
+I am opening this PR because all private communication attempts have been ignored.
 
-```
-modelm-remap  ·  Soarer's Converter
-  adapter  Soarer's Keyboard Converter  (USB 16c0:047d)
-  firmware v1.12   EEPROM 1024 bytes (990 bytes free)
+I enrolled in the VIP program offered by RemoteWorker.id and paid a total of **IDR 22,000,000** in registration fees.
 
-STEP 1 — Press the key you want to remap.
-  Press it on the IBM Model M now (Ctrl-C to abort)…
-  ✔ Detected: RALT  (Option (right) ⌥, code 0x40)
+Despite multiple attempts to contact you through available channels, I have not received any meaningful response regarding my case. As of today, the issue remains unresolved.
 
-STEP 2 — What should RALT do?
-    Command / Mac modifiers
-      1  LGUI   Command (left)   ⌘
-      2  RGUI   Command (right)  ⌘
-      ...
-```
+## ❓ Simple Question
 
-## Install
+**When will my IDR 22,000,000 VIP registration fee be refunded?**
 
-The low-level tools are vendored under `vendor/bin` and built once:
+I have been waiting for a response for a long time and have received no clear timeline, no refund process, and no accountability.
 
-```sh
-./build.sh          # clones thentenaar/sctools and compiles scas/scdis/sctool
-```
+## ⚠️ Notice to Visitors
 
-`build.sh` needs only Xcode command-line tools (`clang`) — no Homebrew, no
-autotools. `sctool` is compiled against the bundled hidapi macOS backend.
+Before using this repository, please do your own due diligence.
 
-Put the CLI on your `PATH` (optional):
+I am not claiming that this repository contains malicious code. However, the owner has been unresponsive regarding an unresolved customer dispute involving a significant amount of money.
 
-```sh
-ln -sf "$PWD/modelm-remap" ~/.local/bin/modelm-remap
-```
+For that reason, I personally cannot recommend blindly installing or running software from this repository without performing your own security review.
 
-## Usage
+- Review the source code yourself.
+- Audit dependencies carefully.
+- Inspect installation scripts before execution.
+- Do not run anything on sensitive systems without understanding what it does.
 
-```sh
-modelm-remap                          # interactive wizard (the main flow)
-modelm-remap --from RALT --to LGUI --dry-run   # preview, write nothing
-modelm-remap set RALT LGUI            # non-interactive, with confirmation
-modelm-remap set RCTRL RGUI -y        # no confirmation prompt
-modelm-remap screenshot               # press a key -> Cmd+Shift+4 (region screenshot)
-modelm-remap copy                     # press a key -> Cmd+C
-modelm-remap paste                    # press a key -> Cmd+V
-modelm-remap select-all               # press a key -> Cmd+A
-modelm-remap copy --from F10          # same, trigger key given up front
-modelm-remap macro                    # press a key -> choose a shortcut to send
-modelm-remap shortcut F10 CMD+SHIFT+4 # non-interactive shortcut macro
-modelm-remap shortcuts                # list the named shortcuts
-modelm-remap listen                   # print keys as you press them
-modelm-remap show                     # config currently stored in the converter
-modelm-remap keys CMD                 # list/search valid key names
-modelm-remap info                     # firmware + EEPROM info
-modelm-remap read backup.scb          # save the whole config
-modelm-remap restore backup.scb       # write a saved config back
-```
+## 📌 What I Am Requesting
 
-Options: `--dry-run` (show the result, don't write), `--yes/-y` (skip the
-confirm prompt), `--timeout N` (key-capture timeout), `--bin-dir DIR`.
+I am requesting one of the following:
 
-## How it works
+1. A clear response regarding my case.
+2. A written resolution plan.
+3. A full refund of the VIP registration fee (**IDR 22,000,000**).
 
-A Soarer's Converter exposes three HID interfaces:
+I remain open to resolving this matter privately and professionally.
 
-| Interface | Usage page | Used for |
-|---|---|---|
-| keyboard | `0x0001` | normal typing |
-| diagnostic | `0xff31` / `0x0074` | key events (`+XX` = press) |
-| config | `0xff99` / `0x2468` | read/write the EEPROM config |
+Please respond with a refund timeline or resolution plan @swdevbali 
 
-`modelm-remap` uses the **diagnostic** interface to see the *physical* key you
-press (before remapping), then:
-
-1. reads the current config out of EEPROM,
-2. disassembles it to Soarer's text (`scdis`),
-3. merges your remap into the first `remapblock`,
-4. assembles it (`scas`), writes it back (`sctool`),
-5. reads it back and verifies the bytes match.
-
-Existing remaps are preserved. Every write is preceded by a backup in
-`~/.config/modelm-remap/backups/` (both `.scb` and a readable `.sc`).
-
-The resulting source is a normal Soarer's config you can also edit by hand:
-
-```
-ifkeyboard any
-ifselect any
-remapblock
-layer 0
-    EXTRA_F10 LGUI
-    RALT LGUI
-endblock
-```
-
-## Shortcuts (macros)
-
-A plain remap turns one key into one key. A **shortcut** is several keys at
-once — a chord like `⌘⇧4` — so it is stored as a Soarer's Converter *macro*
-that the converter synthesises from a single press:
-
-```sh
-modelm-remap screenshot               # the built-in one: Cmd+Shift+4
-modelm-remap copy                     # Cmd+C
-modelm-remap paste                    # Cmd+V
-modelm-remap select-all               # Cmd+A
-modelm-remap macro                    # pick any shortcut interactively
-modelm-remap shortcut F10 CMD+SHIFT+4 # or name the chord yourself
-```
-
-`modelm-remap shortcut` accepts any trigger key and a chord built from
-modifiers (`CMD`, `SHIFT`, `CTRL`, `OPT`, and their `R…`/right-hand forms) plus
-one ordinary key. Run `modelm-remap shortcuts` to list the built-in names; each
-is just an alias for its chord, so `shortcut F10 COPY` and `macro --to UNDO`
-work too.
-
-| Editing | Text navigation | Screenshots | System |
-|---|---|---|---|
-| `CUT` ⌘X | `HOME` ⌘← | `SCREENSHOT` ⌘⇧4 | `SPOTLIGHT` ⌘␣ |
-| `COPY` ⌘C | `END` ⌘→ | `SCREENSHOT_FULL` ⌘⇧3 | `EMOJI` ⌃⌘␣ |
-| `PASTE` ⌘V | `WORD_LEFT` ⌥← | `SCREENSHOT_CLIPBOARD` ⌃⌘⇧4 | `LOCK_SCREEN` ⌃⌘Q |
-| `UNDO` ⌘Z | `WORD_RIGHT` ⌥→ | `SCREENSHOT_OPTIONS` ⌘⇧5 | `FORCE_QUIT` ⌥⌘⎋ |
-| `REDO` ⌘⇧Z | `DELETE_WORD` ⌥⌫ | | `MISSION_CONTROL` ⌃↑ |
-| `SELECT_ALL` ⌘A | `DELETE_LINE_START` ⌘⌫ | | |
-| `FIND` ⌘F | | | |
-| `SAVE` ⌘S | | | |
-
-The resulting config is a normal macro you can also edit by hand:
-
-```
-macroblock
-	macro EXTRA_F10
-		PUSH_META ASSIGN_META LGUI LSHIFT
-		PRESS 4
-		POP_META
-	endmacro
-endblock
-```
-
-Adding a shortcut for a key that already has a remap replaces that remap, and
-adding one for a key that already has a macro replaces that macro.
-
-## Mac key reference
-
-| macOS | Soarer token | Notes |
-|---|---|---|
-| ⌘ Command (left) | `LGUI` | most common target |
-| ⌘ Command (right) | `RGUI` | |
-| ⌥ Option (left) | `LALT` | |
-| ⌥ Option (right) | `RALT` | |
-| ⌃ Control (left/right) | `LCTRL` / `RCTRL` | |
-| ⇧ Shift | `LSHIFT` / `RSHIFT` | |
-
-Aliases accepted by the tool: `CMD`, `COMMAND`, `SUPER`, `WIN` → `LGUI`;
-`OPT`/`OPTION` → `LALT`; `CONTROL` → `LCTRL`; `RETURN` → `ENTER`.
-
-## Troubleshooting
-
-- **"no Soarer's Converter found"** — check the adapter is plugged in and the
-  keyboard cable is seated. `system_profiler SPUSBDataType | grep -i soarer`
-  should list it; the USB id is `16c0:047d`.
-- **Nothing detected when pressing a key** — run `modelm-remap listen` and
-  watch the output. The tool watches for the `+XX` press event; if your key is
-  unusual, pass `--from NAME` explicitly (see `modelm-remap keys`).
-- **Writing fails** — the converter may be busy; unplug/replug it and retry.
-  Your previous config is always backed up first, and `restore` can put it back.
-- **Keys also type into the terminal while capturing** — that's normal (the
-  standard keyboard interface still delivers to macOS); the input is drained
-  afterwards.
-
-## Credits
-
-`scas` / `scdis` / `sctool` come from
-[thentenaar/sctools](https://github.com/thentenaar/sctools) (BSD-2-Clause),
-a maintained replacement for Soarer's original converter tools. Soarer's
-Converter firmware itself is by Soarer.
+Thank you.
